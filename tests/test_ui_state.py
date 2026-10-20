@@ -86,3 +86,66 @@ class UITests(unittest.TestCase):
         self.app._finish_close()
         self.assertFalse(self.app._healthy)
         self.app.root.destroy.assert_not_called()
+
+    def test_restore_loads_settings_without_starting_playback(self):
+        from pathlib import Path
+        import tempfile
+        from echokeys.storage import Task, save_task
+        with tempfile.TemporaryDirectory() as folder:
+            self.app.path = Path(folder) / 'task.json'
+            task = Task(Recording((Event(.1, 'move', (10, 20)),), 1), 3, .25)
+            save_task(self.app.path, task)
+            self.app._restore()
+            self.assertEqual(self.app.engine.recording, task.recording)
+            self.assertEqual((self.app.count.get(), self.app.interval.get()), ('3', '0.25'))
+            self.assertFalse(self.app.engine.busy)
+            self.assertFalse(self.app._dirty)
+            self.app.engine.backend.send.assert_not_called()
+
+    def test_corrupt_saved_task_leaves_app_available_for_new_recording(self):
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            self.app.path = Path(folder) / 'task.json'
+            self.app.path.write_text('not JSON')
+            self.app._restore()
+            self.assertTrue(self.app._load_error)
+            self.assertEqual(self.app.engine.state, 'empty')
+            self.app._record()
+            self.assertTrue(self.app.engine.busy)
+
+    def test_save_error_keeps_unsaved_changes(self):
+        from unittest.mock import patch
+        self.app.path = 'unused.json'
+        self.app._dirty = True
+        with patch('echokeys.app.save_task', side_effect=OSError('disk full')):
+            self.assertFalse(self.app._save())
+        self.assertTrue(self.app._dirty)
+        self.app.dialogs.showerror.assert_called_once()
+
+    def test_cancel_close_keeps_window_open_and_preserves_unsaved_changes(self):
+        self.app.backend = Mock()
+        self.app._dirty = True
+        self.app._closing = True
+        self.app.dialogs.askyesnocancel.return_value = None
+        self.app._finish_close()
+        self.assertFalse(self.app._closing)
+        self.assertTrue(self.app._dirty)
+        self.app.backend.close.assert_not_called()
+        self.app.root.destroy.assert_not_called()
+
+    def test_declining_save_closes_without_replacing_saved_task(self):
+        from pathlib import Path
+        import tempfile
+        from echokeys.storage import Task, load_task, save_task
+        with tempfile.TemporaryDirectory() as folder:
+            self.app.path = Path(folder) / 'task.json'
+            task = Task(Recording((Event(0, 'move', (1, 2)),), 1), 4, .5)
+            save_task(self.app.path, task)
+            self.app.backend = Mock()
+            self.app.count.set('10')
+            self.app._dirty = True
+            self.app.dialogs.askyesnocancel.return_value = False
+            self.app._finish_close()
+            self.app.root.destroy.assert_called_once()
+            self.assertEqual(load_task(self.app.path), task)

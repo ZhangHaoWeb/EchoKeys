@@ -63,6 +63,44 @@ class BackendTests(unittest.TestCase):
         self.backend._key('escape', False)
         self.assertEqual(actions, ['stop'])
 
+    def test_escape_during_key_press_cancels_playback_and_releases_key(self):
+        import threading
+        from echokeys.engine import play_recording
+        from echokeys.model import Recording
+        cancel = threading.Event()
+        self.backend.on_stop = cancel.set
+        press = self.kb.press
+        def press_then_escape(key):
+            press(key)
+            self.backend._key('escape', True)
+        self.kb.press = press_then_escape
+        recording = Recording((Event(0, 'key_down', ('vk:65',)),
+                               Event(1, 'key_up', ('vk:65',))), 2)
+        play_recording(recording, 3, 1, cancel, self.backend, lambda *args: None)
+        self.assertTrue(cancel.is_set())
+        self.assertEqual(self.kb.actions, [('down', 65), ('up', 65)])
+        self.backend.release_all()
+        self.assertEqual(self.kb.actions, [('down', 65), ('up', 65)])
+
+    def test_escape_during_mouse_press_cancels_playback_and_releases_button(self):
+        import threading
+        from echokeys.engine import play_recording
+        from echokeys.model import Recording
+        cancel = threading.Event()
+        self.backend.on_stop = cancel.set
+        press = self.mouse.press
+        def press_then_escape(button):
+            press(button)
+            self.backend._key('escape', True)
+        self.mouse.press = press_then_escape
+        recording = Recording((Event(0, 'mouse_down', ('left', 10, 20)),
+                               Event(1, 'mouse_up', ('left', 10, 20))), 2)
+        play_recording(recording, 3, 1, cancel, self.backend, lambda *args: None)
+        self.assertTrue(cancel.is_set())
+        self.assertEqual(self.mouse.actions, [('down', 'L'), ('up', 'L')])
+        self.backend.release_all()
+        self.assertEqual(self.mouse.actions, [('down', 'L'), ('up', 'L')])
+
 
 class ListenerLifecycleTests(unittest.TestCase):
     def make_backend(self, ready=True):
